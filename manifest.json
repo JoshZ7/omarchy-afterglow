@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.joshz7.afterglow",
+  "name": "Afterglow — Media Visualiser and Control",
+  "version": "1.0.0",
+  "author": "JoshZ7",
+  "description": "Theme-aware PipeWire spectrum with hover media controls for the Omarchy bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "CavaNowPlaying.qml"
+  },
+  "barWidget": {
+    "displayName": "Afterglow",
+    "description": "PipeWire spectrum with hover media controls, marquee metadata, and MPRIS actions",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {
+      "showNextButton": false,
+      "doubleClickSkips": true,
+      "hoverFeedback": true,
+      "collapsedWidth": 178,
+      "expandedWidth": 348,
+      "sparkIntensity": "subtle",
+      "colorMode": "theme"
+    },
+    "schema": [
+      { "key": "showNextButton", "type": "boolean", "label": "Show next-track button" },
+      { "key": "doubleClickSkips", "type": "boolean", "label": "Double-click to skip" },
+      { "key": "hoverFeedback", "type": "boolean", "label": "Theme-coloured hover feedback" },
+      { "key": "collapsedWidth", "type": "number", "label": "Collapsed width" },
+      { "key": "expandedWidth", "type": "number", "label": "Expanded width" },
+      { "key": "sparkIntensity", "type": "string", "label": "Spark intensity" },
+      { "key": "colorMode", "type": "string", "label": "Colour mode" }
+    ]
+  }
+}
