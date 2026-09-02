@@ -1,10 +1,10 @@
-# Afterglow — Media Visualiser and Control
+# Ember — Audio Controller and Visualiser
 
-A theme-aware [Cava](https://github.com/karlstav/cava) spectrum for the Omarchy bar, paired with a compact MPRIS now-playing control.
+A theme-aware [Cava](https://github.com/karlstav/cava) spectrum for the Omarchy bar, paired with a compact MPRIS now-playing control and optional ember effects.
 
 Hover it to reveal the current title and play/pause control. The metadata scrolls when needed; click it once to play/pause, twice to skip forward, and three times to go back. Clicking the spectrum focuses the active media source when it supports MPRIS `Raise`.
 
-![Afterglow demo](afterglow-demo.gif)
+![Ember demo](afterglow-demo.gif)
 
 ## Requirements
 
@@ -41,16 +41,18 @@ Add settings to the widget entry in `~/.config/omarchy/shell.json`:
 {
   "id": "io.github.joshz7.afterglow",
   "showNextButton": false,
+  "showPlayPauseButton": true,
   "doubleClickSkips": true,
   "hoverFeedback": true,
   "collapsedWidth": 178,
   "expandedWidth": 348,
-  "sparkIntensity": "subtle",
+  "spectrumBars": 28,
+  "sparkIntensity": "normal",
   "colorMode": "theme"
 }
 ```
 
-`sparkIntensity` accepts `off`, `subtle`, or `lively`.
+`sparkIntensity` accepts `off`, `soft`, `normal`, or `full`. The right-click settings menu provides these controls, along with a visualiser-width slider that changes the number of displayed frequency bands.
 
 `colorMode` accepts `theme` (the default) or `bonfire`. Bonfire uses a fixed ember, red, orange, gold, and yellow ramp regardless of the active desktop theme.
 

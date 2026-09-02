@@ -1,17 +1,17 @@
 {
   "schemaVersion": 1,
   "id": "io.github.joshz7.afterglow",
-  "name": "Afterglow — Media Visualiser and Control",
+  "name": "Ember — Audio Controller and Visualiser",
   "version": "1.0.0",
   "author": "JoshZ7",
-  "description": "Theme-aware PipeWire spectrum with hover media controls for the Omarchy bar",
+  "description": "Theme-aware PipeWire spectrum with ember effects and MPRIS media controls for the Omarchy bar",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "CavaNowPlaying.qml"
   },
   "barWidget": {
-    "displayName": "Afterglow",
-    "description": "PipeWire spectrum with hover media controls, marquee metadata, and MPRIS actions",
+    "displayName": "Ember",
+    "description": "PipeWire spectrum with ember effects, hover media controls, marquee metadata, and MPRIS actions",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "left",
