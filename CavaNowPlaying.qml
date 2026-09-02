@@ -2,6 +2,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
+import qs.Ui
+import qs.Commons
 
 Item {
   id: root
@@ -10,7 +12,11 @@ Item {
   property string moduleName
   property var settings
   property int revision: 0
-  property int bandCount: 28
+  readonly property int configuredBandCount: settings && Number(settings.spectrumBars) > 0
+    ? Math.max(20, Math.min(48, Number(settings.spectrumBars))) : 28
+  property int previewBandCount: configuredBandCount
+  property bool resizingSpectrum: false
+  property int bandCount: previewBandCount
   property var levels: Array(bandCount).fill(0)
   property bool hasSignal: false
   // Themes may supply a Cava-specific ramp; otherwise use their standard palette.
@@ -38,15 +44,19 @@ Item {
     ? (trackTitle + (trackArtist ? "  ·  " + trackArtist : ""))
     : trackArtist, 280)
   // Plugin settings: showNextButton / hoverFeedback (default true), doubleClickSkips (default false).
-  readonly property bool showNextButton: !settings || settings.showNextButton !== false
+  readonly property bool showPlayPauseButton: !settings || settings.showPlayPauseButton !== false
+  readonly property bool showNextButton: settings && settings.showNextButton === true
   readonly property bool doubleClickSkips: settings && settings.doubleClickSkips === true
   readonly property int collapsedWidth: settings && Number(settings.collapsedWidth) > 0 ? Number(settings.collapsedWidth) : 178
   readonly property int expandedWidth: settings && Number(settings.expandedWidth) > 0 ? Number(settings.expandedWidth) : 348
-  readonly property string sparkIntensity: settings && settings.sparkIntensity ? String(settings.sparkIntensity) : "subtle"
-  readonly property real sparkRiseThreshold: sparkIntensity === "lively" ? 0.06 : 0.09
-  readonly property real sparkLevelThreshold: sparkIntensity === "lively" ? 0.13 : 0.17
+  readonly property string emberMode: !settings || !settings.sparkIntensity ? "normal"
+    : (settings.sparkIntensity === "subtle" ? "normal"
+      : (settings.sparkIntensity === "lively" ? "full" : String(settings.sparkIntensity)))
+  readonly property int emberCount: emberMode === "full" ? 22 : (emberMode === "soft" ? 7 : (emberMode === "off" ? 0 : 14))
+  onConfiguredBandCountChanged: if (!resizingSpectrum) previewBandCount = configuredBandCount
   property int mediaClickSequence: 0
   property bool expanded: mediaHover.hovered && hasTrack
+  property bool settingsOpen: false
 
   // A player can replace its metadata while the panel remains open. Start the
   // new title at the beginning instead of inheriting the prior title's offset.
@@ -74,6 +84,16 @@ Item {
   function boundedText(value, limit) {
     const text = String(value || "")
     return text.length > limit ? text.slice(0, Math.max(0, limit - 1)) + "…" : text
+  }
+
+  function updateSetting(key, value) {
+    settings = Object.assign({}, settings || {}, { [key]: value })
+    if (bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
+      bar.shell.updateEntryInline(moduleName, settings)
+  }
+
+  function close() {
+    settingsOpen = false
   }
 
   function raiseActivePlayer() {
@@ -141,7 +161,7 @@ Item {
     return palette[Math.min(palette.length - 1, Math.floor(Math.max(0, level) * palette.length))]
   }
 
-  implicitWidth: !(hasSignal || hasTrack) ? 0 : (bar && bar.vertical ? bar.barSize : (expanded ? expandedWidth : collapsedWidth))
+  implicitWidth: !(hasSignal || hasTrack) ? 0 : (bar && bar.vertical ? bar.barSize : (expanded ? Math.max(expandedWidth, bandCount * 6 + 177) : Math.max(collapsedWidth, bandCount * 6 + 9)))
   implicitHeight: bar ? bar.barSize : 30
   visible: hasSignal || hasTrack
 
@@ -150,8 +170,17 @@ Item {
   }
 
   function loadFrame(frame) {
-    const values = String(frame || "").trim().split(";")
+    const rawValues = String(frame || "").trim().split(";")
+    const values = []
+    for (let i = 0; i < rawValues.length; i++) {
+      const raw = rawValues[i].trim()
+      const value = Number(raw)
+      if (raw !== "" && isFinite(value)) values.push(value)
+    }
+    if (values.length === 0) return
     const next = []
+    // Every display width summarizes the complete Cava frame: narrow views
+    // combine adjacent frequencies; wide views split them back out.
     for (let i = 0; i < bandCount; i++) {
       const start = Math.floor(i * values.length / bandCount)
       const end = Math.floor((i + 1) * values.length / bandCount)
@@ -254,6 +283,8 @@ Item {
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       text: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
+      visible: root.showPlayPauseButton
+      width: visible ? contentWidth : 0
       color: root.hoverFeedbackEnabled && mediaControlsHover.containsMouse ? root.interactionColor : (root.bar ? root.bar.foreground : "white")
       font.family: root.bar ? root.bar.fontFamily : "monospace"
       font.pixelSize: 16
@@ -262,7 +293,7 @@ Item {
     Item {
       id: trackViewport
       anchors.left: playPause.right
-      anchors.leftMargin: 8
+      anchors.leftMargin: playPause.visible ? 8 : 0
       anchors.right: nextTrack.left
       anchors.rightMargin: 7
       anchors.verticalCenter: parent.verticalCenter
@@ -325,12 +356,17 @@ Item {
       enabled: root.hasTrack
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onPressed: {
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onPressed: function(mouse) {
         // A follow-up press may become a double/triple click, so don't let
         // the pending single-click action fire underneath it.
-        if (root.doubleClickSkips && root.mediaClickSequence > 0) mediaGestureTimer.stop()
+        if (mouse.button === Qt.LeftButton && root.doubleClickSkips && root.mediaClickSequence > 0) mediaGestureTimer.stop()
       }
-      onClicked: {
+      onClicked: function(mouse) {
+        if (mouse.button === Qt.RightButton) {
+          root.settingsOpen = !root.settingsOpen
+          return
+        }
         if (!root.doubleClickSkips) {
           root.toggleActivePlayer()
           return
@@ -356,7 +392,11 @@ Item {
       enabled: root.activePlayer && root.activePlayer.canGoNext
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onClicked: root.skipNext()
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onClicked: function(mouse) {
+        if (mouse.button === Qt.RightButton) root.settingsOpen = !root.settingsOpen
+        else root.skipNext()
+      }
     }
   }
 
@@ -374,17 +414,8 @@ Item {
         required property int index
         readonly property int _revision: root.revision
         readonly property real level: root.levels[index] || 0
-        property real previousLevel: 0
-        property int sparkBurst: 0
         width: 3
         height: Math.max(4, root.height - 10)
-
-        onLevelChanged: {
-          // Emit only on a real upward hit, avoiding a constant glitter at
-          // quiet levels. The particles then fall back into the bar.
-          if (root.sparkIntensity !== "off" && level > previousLevel + root.sparkRiseThreshold && level > root.sparkLevelThreshold) sparkBurst += 1
-          previousLevel = level
-        }
 
         Rectangle {
           anchors.bottom: parent.bottom
@@ -394,48 +425,90 @@ Item {
           color: root.colorForLevel(level)
           Behavior on height { NumberAnimation { duration: 45 } }
         }
+      }
+    }
+  }
 
-        Repeater {
-          model: 2
-          delegate: Rectangle {
-            id: spark
-            required property int index
-            width: 2
-            height: 2
-            radius: 1
-            x: index === 0 ? 0 : parent.width - width
-            property real landingY: Math.max(0, parent.height * (1 - level) - 2)
-            y: landingY
-            opacity: 0
-            color: root.colorForLevel(level)
+  // A few independent embers make the spectrum feel like a small fire rather
+  // than a beat-by-beat particle fountain. They always float upward.
+  Item {
+    id: emberLayer
+    anchors.right: spectrum.right
+    anchors.verticalCenter: spectrum.verticalCenter
+    width: spectrum.width
+    height: spectrum.height
+    z: 2
+    visible: spectrum.visible && root.hasSignal && root.emberMode !== "off"
 
-            onLandingYChanged: {
-              if (!falling.running) y = landingY
-            }
+    Repeater {
+      model: root.emberCount
+      delegate: Rectangle {
+        id: ember
+        required property int index
+        width: index % 3 === 0 ? 3 : 2
+        height: width
+        radius: width / 2
+        opacity: 0
+        property real startY: 0
+        property real endY: 0
+        property color emberColor: "white"
+        color: emberColor
 
-            Connections {
-              target: parent
-              function onSparkBurstChanged() { falling.restart() }
-            }
+        function launch() {
+          const activeBands = []
+          for (let band = 0; band < root.bandCount; band++) {
+            if ((root.levels[band] || 0) > 0.04) activeBands.push(band)
+          }
+          // Wait for a live bar instead of letting an ember originate from
+          // empty space. Its already-running flight is left untouched.
+          if (activeBands.length === 0) {
+            nextEmber.interval = 120 + Math.floor(Math.random() * 380)
+            nextEmber.restart()
+            return
+          }
+          const band = activeBands[Math.floor(Math.random() * activeBands.length)]
+          const level = root.levels[band] || 0
+          const bandWidth = parent.width / root.bandCount
+          x = Math.max(0, Math.min(parent.width - width, (band + 0.5) * bandWidth - width / 2))
+          startY = Math.max(0, parent.height * (1 - level) - 2)
+          endY = -5 - Math.random() * 13
+          y = startY
+          // Stay in the warm middle of the ramp: no pale/white embers.
+          emberColor = root.colorForLevel(0.2 + Math.random() * 0.35)
+          rise.duration = 1050 + Math.floor(Math.random() * 1250)
+          fade.duration = rise.duration
+          riseAndFade.restart()
+        }
 
-            ParallelAnimation {
-              id: falling
-              NumberAnimation {
-                target: spark
-                property: "y"
-                from: Math.max(0, spark.landingY - 10 - spark.index * 3)
-                to: spark.landingY + 1
-                duration: 620 + spark.index * 120
-                easing.type: Easing.InQuad
-              }
-              NumberAnimation {
-                target: spark
-                property: "opacity"
-                from: 0.9
-                to: 0
-                duration: 760 + spark.index * 120
-              }
-            }
+        Component.onCompleted: nextEmber.restart()
+
+        Timer {
+          id: nextEmber
+          interval: 80 + Math.floor(Math.random() * 550)
+          repeat: false
+          onTriggered: ember.launch()
+        }
+
+        ParallelAnimation {
+          id: riseAndFade
+          onStopped: {
+            nextEmber.interval = 150 + Math.floor(Math.random() * 650)
+            nextEmber.restart()
+          }
+          NumberAnimation {
+            id: rise
+            target: ember
+            property: "y"
+            from: ember.startY
+            to: ember.endY
+            easing.type: Easing.OutQuad
+          }
+          NumberAnimation {
+            id: fade
+            target: ember
+            property: "opacity"
+            from: 0.72
+            to: 0
           }
         }
       }
@@ -455,8 +528,265 @@ Item {
     anchors.fill: spectrum
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
+    acceptedButtons: Qt.LeftButton | Qt.RightButton
     onEntered: if (bar) bar.showTooltip(root, "CAVA · PipeWire spectrum")
     onExited: if (bar) bar.hideTooltip(root)
-    onClicked: root.raiseActivePlayer()
+    onClicked: function(mouse) {
+      if (mouse.button === Qt.RightButton) root.settingsOpen = !root.settingsOpen
+      else root.raiseActivePlayer()
+    }
+  }
+
+  PopupCard {
+    id: settingsPopup
+    anchorItem: root
+    bar: root.bar
+    owner: root
+    open: root.settingsOpen
+    contentWidth: fittedContentWidth(236)
+    contentHeight: fittedContentHeight(settingsColumn.implicitHeight)
+
+    Column {
+      id: settingsColumn
+      anchors.fill: parent
+      spacing: 8
+
+      Text {
+        text: "Ember settings"
+        color: Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 14
+      }
+
+      Text {
+        text: "Colour"
+        color: Color.foreground
+        opacity: 0.82
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 11
+      }
+
+      Row {
+        width: parent.width
+        spacing: 6
+        Repeater {
+          model: [
+            { label: "Match theme", value: "theme" },
+            { label: "Ember", value: "bonfire" }
+          ]
+          delegate: Rectangle {
+            required property var modelData
+            width: (settingsColumn.width - 6) / 2
+            height: 27
+            radius: 5
+            color: root.colorMode === modelData.value ? root.interactionColor : Color.background
+            border.width: 1
+            border.color: root.colorMode === modelData.value ? root.interactionColor : Color.muted
+            Text {
+              anchors.centerIn: parent
+              text: modelData.label
+              color: root.colorMode === modelData.value ? Color.background : Color.foreground
+              font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+              font.pixelSize: 11
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.updateSetting("colorMode", modelData.value)
+            }
+          }
+        }
+      }
+
+      Rectangle { width: parent.width; height: 1; color: Color.muted; opacity: 0.45 }
+
+      Item {
+        width: parent.width
+        height: 27
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Skip button"
+          color: Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+          font.pixelSize: 12
+        }
+        Rectangle {
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 38
+          height: 20
+          radius: 10
+          color: root.showNextButton ? root.interactionColor : Color.muted
+          Rectangle {
+            width: 16
+            height: 16
+            radius: 8
+            anchors.verticalCenter: parent.verticalCenter
+            x: root.showNextButton ? parent.width - width - 2 : 2
+            color: Color.background
+            Behavior on x { NumberAnimation { duration: 120 } }
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.updateSetting("showNextButton", !root.showNextButton)
+          }
+        }
+      }
+
+      Item {
+        width: parent.width
+        height: 27
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Play/pause button"
+          color: Color.foreground
+          font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+          font.pixelSize: 12
+        }
+        Rectangle {
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          width: 38
+          height: 20
+          radius: 10
+          color: root.showPlayPauseButton ? root.interactionColor : Color.muted
+          Rectangle {
+            width: 16
+            height: 16
+            radius: 8
+            anchors.verticalCenter: parent.verticalCenter
+            x: root.showPlayPauseButton ? parent.width - width - 2 : 2
+            color: Color.background
+            Behavior on x { NumberAnimation { duration: 120 } }
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.updateSetting("showPlayPauseButton", !root.showPlayPauseButton)
+          }
+        }
+      }
+
+      Text {
+        text: "Embers"
+        color: Color.foreground
+        opacity: 0.82
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 11
+      }
+
+      Row {
+        width: parent.width
+        spacing: 4
+        Repeater {
+          model: [
+            { label: "Off", value: "off" },
+            { label: "Soft", value: "soft" },
+            { label: "Normal", value: "normal" },
+            { label: "Full", value: "full" }
+          ]
+          delegate: Rectangle {
+            required property var modelData
+            width: (settingsColumn.width - 12) / 4
+            height: 27
+            radius: 5
+            color: root.emberMode === modelData.value ? root.interactionColor : Color.background
+            border.width: 1
+            border.color: root.emberMode === modelData.value ? root.interactionColor : Color.muted
+            Text {
+              anchors.centerIn: parent
+              text: modelData.label
+              color: root.emberMode === modelData.value ? Color.background : Color.foreground
+              font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+              font.pixelSize: 10
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.updateSetting("sparkIntensity", modelData.value)
+            }
+          }
+        }
+      }
+
+      Item {
+        width: parent.width
+        height: 42
+        Text {
+          text: "Visualiser width  ·  " + root.previewBandCount + " bars"
+          color: Color.foreground
+          opacity: 0.82
+          font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+          font.pixelSize: 11
+        }
+        Rectangle {
+          id: widthTrack
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          height: 4
+          radius: 2
+          color: Color.muted
+          opacity: 0.55
+          Rectangle {
+            width: parent.width * (root.previewBandCount - 20) / 28
+            height: parent.height
+            radius: parent.radius
+            color: root.interactionColor
+          }
+          Rectangle {
+            width: 14
+            height: 14
+            radius: 7
+            anchors.verticalCenter: parent.verticalCenter
+            x: parent.width * (root.previewBandCount - 20) / 28 - width / 2
+            color: root.interactionColor
+          }
+          Rectangle {
+            // Magnetic home mark: the original 28-bar visualiser width.
+            width: 2
+            height: 10
+            radius: 1
+            anchors.verticalCenter: parent.verticalCenter
+            x: parent.width * (28 - 20) / 28 - width / 2
+            color: Color.foreground
+            opacity: 0.8
+          }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.SizeHorCursor
+            function previewAt(position) {
+              let bands = Math.round(20 + Math.max(0, Math.min(width, position)) / width * 28)
+              if (Math.abs(bands - 28) <= 1) bands = 28
+              root.previewBandCount = bands
+            }
+            onPressed: function(mouse) {
+              root.resizingSpectrum = true
+              previewAt(mouse.x)
+            }
+            onPositionChanged: function(mouse) {
+              if (pressed) previewAt(mouse.x)
+            }
+            onReleased: {
+              root.resizingSpectrum = false
+              root.updateSetting("spectrumBars", root.previewBandCount)
+            }
+          }
+        }
+      }
+
+      Rectangle { width: parent.width; height: 1; color: Color.muted; opacity: 0.45 }
+
+      Text {
+        width: parent.width
+        text: "Click: play/pause\nDouble-click: next\nTriple-click: previous\nClick visualiser: focus audio player"
+        color: Color.foreground
+        opacity: 0.82
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 10
+        wrapMode: Text.WordWrap
+      }
+    }
   }
 }

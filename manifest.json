@@ -17,20 +17,24 @@
     "defaultSection": "left",
     "defaults": {
       "showNextButton": false,
+      "showPlayPauseButton": true,
       "doubleClickSkips": true,
       "hoverFeedback": true,
       "collapsedWidth": 178,
       "expandedWidth": 348,
-      "sparkIntensity": "subtle",
+      "spectrumBars": 28,
+      "sparkIntensity": "normal",
       "colorMode": "theme"
     },
     "schema": [
       { "key": "showNextButton", "type": "boolean", "label": "Show next-track button" },
+      { "key": "showPlayPauseButton", "type": "boolean", "label": "Show play/pause button" },
       { "key": "doubleClickSkips", "type": "boolean", "label": "Double-click to skip" },
       { "key": "hoverFeedback", "type": "boolean", "label": "Theme-coloured hover feedback" },
       { "key": "collapsedWidth", "type": "number", "label": "Collapsed width" },
       { "key": "expandedWidth", "type": "number", "label": "Expanded width" },
-      { "key": "sparkIntensity", "type": "string", "label": "Spark intensity" },
+      { "key": "spectrumBars", "type": "number", "label": "Visualiser bars" },
+      { "key": "sparkIntensity", "type": "string", "label": "Ember amount" },
       { "key": "colorMode", "type": "string", "label": "Colour mode" }
     ]
   }
