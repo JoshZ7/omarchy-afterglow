@@ -57,6 +57,7 @@ Item {
   property int mediaClickSequence: 0
   property bool expanded: mediaHover.hovered && hasTrack
   property bool settingsOpen: false
+  property double lastFrameAt: 0
 
   // A player can replace its metadata while the panel remains open. Start the
   // new title at the beginning instead of inheriting the prior title's offset.
@@ -191,6 +192,7 @@ Item {
     levels = next
     // Keep very quiet tracks visible, while a true all-zero CAVA frame hides it.
     hasSignal = Math.max.apply(null, next) > 0
+    lastFrameAt = Date.now()
     revision += 1
   }
 
@@ -251,6 +253,21 @@ Item {
     running: true
     repeat: true
     onTriggered: if (!cavaFrameReader.running) cavaFrameReader.running = true
+  }
+
+  // PipeWire/Cava may stop publishing frames entirely when playback pauses.
+  // Do not leave the final live spectrum frozen on screen in that case.
+  Timer {
+    interval: 100
+    running: true
+    repeat: true
+    onTriggered: {
+      if (root.hasSignal && root.lastFrameAt > 0 && Date.now() - root.lastFrameAt > 250) {
+        root.levels = Array(root.bandCount).fill(0)
+        root.hasSignal = false
+        root.revision += 1
+      }
+    }
   }
 
   // Omarchy can swap the active theme directory without emitting a file-change
