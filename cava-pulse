@@ -170,23 +170,45 @@ def read_theme(path):
         os.close(directory)
 
 
+def group_alive(pgid):
+    """A process group can outlive its leader, so do not use Popen.poll()."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def stop_child(signum=None, _frame=None):
     global child_process
     process = child_process
-    if process is not None and process.poll() is None:
+    if process is not None:
+        # Popen starts Cava in a fresh session, making its pid a stable PGID
+        # for the short cleanup window even if Cava's leader exits first.
+        pgid = process.pid
         try:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         deadline = time.monotonic() + 0.8
-        while process.poll() is None and time.monotonic() < deadline:
+        while group_alive(pgid) and time.monotonic() < deadline:
             time.sleep(0.05)
-        if process.poll() is None:
+        if group_alive(pgid):
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(pgid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        process.wait()
+        # Give SIGKILL a bounded moment to reap every descendant, then reap
+        # Cava's leader independently of whether it exited before escalation.
+        deadline = time.monotonic() + 0.8
+        while group_alive(pgid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        try:
+            process.wait()
+        except ChildProcessError:
+            pass
     child_process = None
     if signum is not None:
         raise SystemExit(128 + signum)
