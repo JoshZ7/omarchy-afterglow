@@ -218,7 +218,7 @@ Item {
   }
 
   Timer {
-    interval: 150
+    interval: 50
     running: true
     repeat: true
     onTriggered: if (!cavaFrameReader.running) cavaFrameReader.running = true
