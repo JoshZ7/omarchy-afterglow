@@ -17,6 +17,7 @@ Item {
   property var themeColors: ({})
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + (moduleName || "io.github.joshz7.afterglow")
   property string statePath: Quickshell.env("HOME") + "/.cache/cava-now-playing/bars"
+  readonly property string themePath: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
   // "bonfire" deliberately ignores the active desktop theme.
   readonly property string colorMode: settings && settings.colorMode ? String(settings.colorMode) : "theme"
   // A theme may set cava_hover to a colour, or "none" to turn hover feedback
@@ -30,10 +31,12 @@ Item {
       : (themeColors.cava_3 || themeColors.cyan || themeColors.green || (bar ? bar.foreground : "white")))
   readonly property var mediaPlayers: Mpris.players ? Mpris.players.values : []
   readonly property var activePlayer: selectActivePlayer()
-  readonly property bool hasTrack: activePlayer && (activePlayer.trackTitle || activePlayer.trackArtist)
-  readonly property string trackLabel: activePlayer
-    ? ((activePlayer.trackTitle || "Unknown track") + (activePlayer.trackArtist ? "  ·  " + activePlayer.trackArtist : ""))
-    : ""
+  readonly property string trackTitle: boundedText(activePlayer ? activePlayer.trackTitle : "", 160)
+  readonly property string trackArtist: boundedText(activePlayer ? activePlayer.trackArtist : "", 120)
+  readonly property bool hasTrack: activePlayer && (trackTitle || trackArtist)
+  readonly property string trackLabel: boundedText(trackTitle
+    ? (trackTitle + (trackArtist ? "  ·  " + trackArtist : ""))
+    : trackArtist, 280)
   // Plugin settings: showNextButton / hoverFeedback (default true), doubleClickSkips (default false).
   readonly property bool showNextButton: !settings || settings.showNextButton !== false
   readonly property bool doubleClickSkips: settings && settings.doubleClickSkips === true
@@ -66,6 +69,11 @@ Item {
       if (!fallback) fallback = player
     }
     return fallback
+  }
+
+  function boundedText(value, limit) {
+    const text = String(value || "")
+    return text.length > limit ? text.slice(0, Math.max(0, limit - 1)) + "…" : text
   }
 
   function raiseActivePlayer() {
@@ -158,11 +166,36 @@ Item {
   }
 
   function startCava() {
-    Quickshell.execDetached([pluginDir + "/cava-pulse", pluginDir + "/cava.conf", statePath])
+    if (cavaProcess.running) return
+    cavaStopping = false
+    cavaProcess.running = true
+  }
+
+  function stopCava() {
+    if (!cavaProcess.running) return
+    cavaStopping = true
+    cavaProcess.signal(15)
+    cavaStopTimer.restart()
   }
 
   Component.onCompleted: startCava()
   onModuleNameChanged: if (moduleName) startCava()
+  Component.onDestruction: stopCava()
+
+  property bool cavaStopping: false
+
+  Process {
+    id: cavaProcess
+    command: [root.pluginDir + "/cava-pulse", root.pluginDir + "/cava.conf", root.statePath]
+    onExited: cavaStopTimer.stop()
+  }
+
+  Timer {
+    id: cavaStopTimer
+    interval: 1200
+    repeat: false
+    onTriggered: if (cavaProcess.running) cavaProcess.signal(9)
+  }
 
   // The helper verifies that bars is an owned, regular file and caps it at
   // 4 KiB before emitting it. FileView would read a FIFO or oversized file
@@ -175,13 +208,13 @@ Item {
     }
   }
 
-  FileView {
-    id: themePalette
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
-    watchChanges: true
-    printErrors: false
-    onLoaded: root.loadThemeColors(text())
-    onFileChanged: reload()
+  Process {
+    id: themePaletteReader
+    command: [root.pluginDir + "/cava-pulse", "--read-theme", root.themePath]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.loadThemeColors(text)
+    }
   }
 
   Timer {
@@ -197,7 +230,7 @@ Item {
     interval: 1000
     running: true
     repeat: true
-    onTriggered: themePalette.reload()
+    onTriggered: if (!themePaletteReader.running) themePaletteReader.running = true
   }
 
   Item {

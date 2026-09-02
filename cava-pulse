@@ -4,18 +4,29 @@
 import fcntl
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 MAX_FRAME_BYTES = 4096
+MAX_THEME_BYTES = 16384
 ZERO_FRAME = ("0;" * 27) + "0\n"
 FRAME_RE = re.compile(rb"[0-9;]+\r?\n?\Z")
+child_process = None
 
 
 def fail(message):
     print(f"cava-pulse: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def require_owned_directory(descriptor, label):
+    info = os.fstat(descriptor)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+        os.close(descriptor)
+        fail(f"{label} is not an owned directory")
 
 
 def open_cache_dir(state_path):
@@ -31,23 +42,41 @@ def open_cache_dir(state_path):
         directory = os.open(cache_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except OSError as error:
         fail(f"refusing cache directory: {error}")
-    info = os.fstat(directory)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
-        os.close(directory)
-        fail("cache directory is not an owned directory")
+    require_owned_directory(directory, "cache directory")
     os.fchmod(directory, 0o700)
     return directory
 
 
-def secure_open(directory, name, flags, mode=0o600):
-    try:
-        descriptor = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, mode, dir_fd=directory)
-    except OSError as error:
-        fail(f"refusing {name}: {error}")
+def validate_leaf(descriptor, name, private=True):
     info = os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_nlink != 1:
         os.close(descriptor)
-        fail(f"refusing non-regular or unowned {name}")
+        fail(f"refusing unsafe {name}")
+    # Upgrade older Afterglow cache leaves only after they passed the ownership,
+    # type, and single-link checks; no destructive operation preceded this.
+    if private and info.st_mode & 0o077:
+        os.fchmod(descriptor, 0o600)
+        info = os.fstat(descriptor)
+    if private and info.st_mode & 0o077:
+        os.close(descriptor)
+        fail(f"refusing non-private {name}")
+
+
+def open_leaf(directory, name, flags, truncate=False):
+    """Open a private regular leaf without destructive flags until it is checked."""
+    try:
+        descriptor = os.open(name, flags | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+    except FileNotFoundError:
+        try:
+            descriptor = os.open(name, flags | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                 0o600, dir_fd=directory)
+        except OSError as error:
+            fail(f"creating {name}: {error}")
+    except OSError as error:
+        fail(f"opening {name}: {error}")
+    validate_leaf(descriptor, name)
+    if truncate:
+        os.ftruncate(descriptor, 0)
     return descriptor
 
 
@@ -56,8 +85,22 @@ def publish(directory, frame):
         return False
     if not frame.endswith(b"\n"):
         frame += b"\n"
-    temporary = f".bars.{os.getpid()}"
-    descriptor = secure_open(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    try:
+        current = os.open("bars", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+    except FileNotFoundError:
+        current = None
+    except OSError as error:
+        fail(f"opening bars: {error}")
+    if current is not None:
+        validate_leaf(current, "bars")
+        os.close(current)
+    temporary = f".bars.{os.getpid()}.{time.monotonic_ns()}"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             0o600, dir_fd=directory)
+    except OSError as error:
+        fail(f"creating temporary frame: {error}")
+    validate_leaf(descriptor, temporary)
     try:
         os.write(descriptor, frame)
         os.fsync(descriptor)
@@ -71,13 +114,14 @@ def publish(directory, frame):
         except OSError:
             pass
         fail(f"publishing frame: {error}")
+    os.fsync(directory)
     return True
 
 
 def read_frame(state_path):
     directory = open_cache_dir(state_path)
     try:
-        descriptor = secure_open(directory, "bars", os.O_RDONLY)
+        descriptor = open_leaf(directory, "bars", os.O_RDONLY)
         try:
             info = os.fstat(descriptor)
             if info.st_size > MAX_FRAME_BYTES:
@@ -95,16 +139,63 @@ def read_frame(state_path):
         os.close(directory)
 
 
-def write_log(directory, message):
-    descriptor = secure_open(directory, "cava.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
-    os.write(descriptor, message.encode())
-    return descriptor
+def read_theme(path):
+    expected = os.path.join(os.path.expanduser("~"), ".local", "state", "omarchy", "current", "theme", "colors.toml")
+    if os.path.abspath(path) != expected:
+        fail("theme path is not Omarchy's current colors.toml")
+    directory = os.open(os.path.expanduser("~"), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        require_owned_directory(directory, "home directory")
+        for component in (".local", "state", "omarchy", "current", "theme"):
+            next_directory = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                     dir_fd=directory)
+            os.close(directory)
+            directory = next_directory
+            require_owned_directory(directory, component)
+        descriptor = os.open("colors.toml", os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_size > MAX_THEME_BYTES:
+                return 1
+            content = os.read(descriptor, MAX_THEME_BYTES + 1)
+            if len(content) > MAX_THEME_BYTES:
+                return 1
+            os.write(sys.stdout.fileno(), content)
+            return 0
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return 1
+    finally:
+        os.close(directory)
+
+
+def stop_child(signum=None, _frame=None):
+    global child_process
+    process = child_process
+    if process is not None and process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 0.8
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait()
+    child_process = None
+    if signum is not None:
+        raise SystemExit(128 + signum)
 
 
 def run_cava(config_path, state_path):
     directory = open_cache_dir(state_path)
     try:
-        lock = secure_open(directory, "lock", os.O_RDWR | os.O_CREAT)
+        lock = open_leaf(directory, "lock", os.O_RDWR)
         try:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -113,12 +204,15 @@ def run_cava(config_path, state_path):
             publish(directory, ZERO_FRAME.encode())
             if not any(os.access(os.path.join(path, "cava"), os.X_OK)
                            for path in os.environ.get("PATH", "").split(os.pathsep)):
-                log = write_log(directory, "Cava is not installed. Install it with: omarchy pkg add cava\n")
-                os.close(log)
+                print("cava-pulse: Cava is not installed. Install it with: omarchy pkg add cava", file=sys.stderr)
                 return 0
-            log = secure_open(directory, "cava.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+            signal.signal(signal.SIGTERM, stop_child)
+            signal.signal(signal.SIGINT, stop_child)
             try:
-                process = subprocess.Popen(["cava", "-p", config_path], stdout=subprocess.PIPE, stderr=log)
+                global child_process
+                child_process = subprocess.Popen(["cava", "-p", config_path], stdout=subprocess.PIPE,
+                                                 stderr=subprocess.DEVNULL, start_new_session=True)
+                process = child_process
                 assert process.stdout is not None
                 while True:
                     frame = process.stdout.readline(MAX_FRAME_BYTES + 1)
@@ -133,7 +227,7 @@ def run_cava(config_path, state_path):
                     publish(directory, frame)
                 return process.wait()
             finally:
-                os.close(log)
+                stop_child()
         finally:
             os.close(lock)
     finally:
@@ -143,6 +237,8 @@ def run_cava(config_path, state_path):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--read":
         raise SystemExit(read_frame(sys.argv[2]))
+    if len(sys.argv) == 3 and sys.argv[1] == "--read-theme":
+        raise SystemExit(read_theme(sys.argv[2]))
     if len(sys.argv) != 3:
-        fail("usage: cava-pulse CAVA_CONFIG STATE_PATH | cava-pulse --read STATE_PATH")
+        fail("usage: cava-pulse CAVA_CONFIG STATE_PATH | cava-pulse --read STATE_PATH | cava-pulse --read-theme THEME_PATH")
     raise SystemExit(run_cava(sys.argv[1], sys.argv[2]))
