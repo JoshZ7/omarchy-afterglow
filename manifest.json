@@ -4,14 +4,14 @@
   "name": "Ember — Audio Controller and Visualiser",
   "version": "1.0.0",
   "author": "JoshZ7",
-  "description": "Theme-aware PipeWire spectrum with ember effects and MPRIS media controls for the Omarchy bar",
+  "description": "First install Cava with `omarchy pkg add cava`; then enjoy a theme-aware PipeWire spectrum with ember effects and MPRIS media controls",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "CavaNowPlaying.qml"
   },
   "barWidget": {
     "displayName": "Ember",
-    "description": "PipeWire spectrum with ember effects, hover media controls, marquee metadata, and MPRIS actions",
+    "description": "Requires Cava (`omarchy pkg add cava`): a PipeWire spectrum with ember effects and MPRIS media controls",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "left",
