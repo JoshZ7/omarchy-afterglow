@@ -239,6 +239,7 @@ Item {
         id: trackText
         anchors.verticalCenter: parent.verticalCenter
         text: root.trackLabel
+        textFormat: Text.PlainText
         color: root.hoverFeedbackEnabled && mediaControlsHover.containsMouse ? root.interactionColor : (root.bar ? root.bar.foreground : "white")
         font.family: root.bar ? root.bar.fontFamily : "monospace"
         font.pixelSize: 13
