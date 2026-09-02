@@ -164,14 +164,15 @@ Item {
   Component.onCompleted: startCava()
   onModuleNameChanged: if (moduleName) startCava()
 
-  FileView {
-    id: cavaState
-    path: root.statePath
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.loadFrame(text())
-    onFileChanged: reload()
+  // The helper verifies that bars is an owned, regular file and caps it at
+  // 4 KiB before emitting it. FileView would read a FIFO or oversized file
+  // before QML could reject it, so the helper is the only frame reader.
+  Process {
+    id: cavaFrameReader
+    command: [root.pluginDir + "/cava-pulse", "--read", root.statePath]
+    stdout: SplitParser {
+      onRead: function(frame) { root.loadFrame(frame) }
+    }
   }
 
   FileView {
@@ -187,7 +188,7 @@ Item {
     interval: 150
     running: true
     repeat: true
-    onTriggered: cavaState.reload()
+    onTriggered: if (!cavaFrameReader.running) cavaFrameReader.running = true
   }
 
   // Omarchy can swap the active theme directory without emitting a file-change
