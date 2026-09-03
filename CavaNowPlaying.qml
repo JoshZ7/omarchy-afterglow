@@ -19,6 +19,11 @@ Item {
   property int bandCount: previewBandCount
   property var levels: Array(bandCount).fill(0)
   property bool hasSignal: false
+  // Cava is optional at install time. Until it is present, Ember offers a
+  // compact, animated onboarding wave instead of an empty or broken widget.
+  property bool cavaAvailable: false
+  readonly property bool needsCava: !cavaAvailable
+  readonly property string cavaInstallCommand: "omarchy pkg add cava"
   // Themes may supply a Cava-specific ramp; otherwise use their standard palette.
   property var themeColors: ({})
   readonly property string pluginDir: Quickshell.env("HOME") + "/.config/omarchy/plugins/" + (moduleName || "io.github.joshz7.afterglow")
@@ -54,9 +59,16 @@ Item {
       : (settings.sparkIntensity === "lively" ? "full" : String(settings.sparkIntensity)))
   readonly property int emberCount: emberMode === "full" ? 22 : (emberMode === "soft" ? 7 : (emberMode === "off" ? 0 : 14))
   onConfiguredBandCountChanged: if (!resizingSpectrum) previewBandCount = configuredBandCount
+  onNeedsCavaChanged: {
+    if (needsCava) stopCava()
+    else startCava()
+  }
   property int mediaClickSequence: 0
-  property bool expanded: mediaHover.hovered && hasTrack
+  property bool expanded: !needsCava && mediaHover.hovered && hasTrack
   property bool settingsOpen: false
+  property bool setupOpen: false
+  property bool installCommandCopied: false
+  property int setupWavePhase: 0
   property double lastFrameAt: 0
 
   // A player can replace its metadata while the panel remains open. Start the
@@ -95,6 +107,24 @@ Item {
 
   function close() {
     settingsOpen = false
+    setupOpen = false
+  }
+
+  function copyCavaInstallCommand() {
+    Quickshell.execDetached(["wl-copy", cavaInstallCommand])
+    installCommandCopied = true
+    copiedNoticeTimer.restart()
+  }
+
+  function openCavaInstallTerminal() {
+    // Foot ignores xdg-terminal-exec's --hold flag. Copy the command, then
+    // keep a normal shell open with paste instructions instead of running a
+    // package action on the user's behalf.
+    copyCavaInstallCommand()
+    Quickshell.execDetached([
+      "xdg-terminal-exec", "bash", "-lc",
+      "printf '%s\\n\\n%s\\n' 'Ember setup' 'Paste the copied command to install Cava, then press Enter.'; exec bash"
+    ])
   }
 
   function raiseActivePlayer() {
@@ -162,9 +192,9 @@ Item {
     return palette[Math.min(palette.length - 1, Math.floor(Math.max(0, level) * palette.length))]
   }
 
-  implicitWidth: !(hasSignal || hasTrack) ? 0 : (bar && bar.vertical ? bar.barSize : (expanded ? Math.max(expandedWidth, bandCount * 6 + 177) : Math.max(collapsedWidth, bandCount * 6 + 9)))
+  implicitWidth: needsCava ? (bar && bar.vertical ? bar.barSize : setupLabel.width + 7 + setupWave.width + 16) : (!(hasSignal || hasTrack) ? 0 : (bar && bar.vertical ? bar.barSize : (expanded ? Math.max(expandedWidth, bandCount * 6 + 177) : Math.max(collapsedWidth, bandCount * 6 + 9))))
   implicitHeight: bar ? bar.barSize : 30
-  visible: hasSignal || hasTrack
+  visible: needsCava || hasSignal || hasTrack
 
   Behavior on implicitWidth {
     NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
@@ -197,7 +227,7 @@ Item {
   }
 
   function startCava() {
-    if (cavaProcess.running) return
+    if (needsCava || cavaProcess.running) return
     cavaStopping = false
     cavaProcess.running = true
   }
@@ -209,8 +239,8 @@ Item {
     cavaStopTimer.restart()
   }
 
-  Component.onCompleted: startCava()
-  onModuleNameChanged: if (moduleName) startCava()
+  Component.onCompleted: cavaAvailabilityProbe.running = true
+  onModuleNameChanged: if (moduleName && !cavaAvailabilityProbe.running) cavaAvailabilityProbe.running = true
   Component.onDestruction: stopCava()
 
   property bool cavaStopping: false
@@ -219,6 +249,31 @@ Item {
     id: cavaProcess
     command: [root.pluginDir + "/cava-pulse", root.pluginDir + "/cava.conf", root.statePath]
     onExited: cavaStopTimer.stop()
+  }
+
+  // Probe independently of the long-running publisher, so installing Cava
+  // while the setup card is open switches Ember to normal mode automatically.
+  Process {
+    id: cavaAvailabilityProbe
+    command: [root.pluginDir + "/cava-pulse", "--check-cava"]
+    onExited: function(exitCode) {
+      root.cavaAvailable = exitCode === 0
+      if (root.cavaAvailable) root.startCava()
+    }
+  }
+
+  Timer {
+    interval: 3000
+    running: true
+    repeat: true
+    onTriggered: if (!cavaAvailabilityProbe.running) cavaAvailabilityProbe.running = true
+  }
+
+  Timer {
+    id: copiedNoticeTimer
+    interval: 1800
+    repeat: false
+    onTriggered: root.installCommandCopied = false
   }
 
   Timer {
@@ -289,7 +344,7 @@ Item {
     height: parent.height
     clip: true
     opacity: root.expanded ? 1 : 0
-    visible: root.hasTrack
+    visible: root.hasTrack && !root.needsCava
 
     Behavior on opacity {
       NumberAnimation { duration: 120 }
@@ -423,7 +478,7 @@ Item {
     anchors.rightMargin: 6
     anchors.verticalCenter: parent.verticalCenter
     spacing: 3
-    visible: !bar || !bar.vertical
+    visible: !root.needsCava && (!bar || !bar.vertical)
 
     Repeater {
       model: root.bandCount
@@ -444,6 +499,131 @@ Item {
         }
       }
     }
+  }
+
+  // A calm, synthetic wave makes the first-run state feel intentional. It is
+  // never presented as real audio data and is replaced by the Cava spectrum as
+  // soon as the dependency becomes available.
+  Item {
+    id: setupWave
+    anchors.right: parent.right
+    anchors.rightMargin: 7
+    anchors.verticalCenter: parent.verticalCenter
+    visible: root.needsCava && (!bar || !bar.vertical)
+    readonly property int bars: 12
+    width: bars * 6 - 3
+    height: Math.max(5, root.height - 10)
+
+    Text {
+      id: setupLabel
+      anchors.right: setupWave.left
+      anchors.rightMargin: 7
+      anchors.verticalCenter: setupWave.verticalCenter
+      text: "Set up Ember"
+      color: "#FF6A22"
+      font.family: "monospace"
+      font.bold: true
+      font.pixelSize: 11
+      MouseArea {
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: root.setupOpen = true
+      }
+    }
+
+    Repeater {
+      model: setupWave.bars
+      delegate: Item {
+        required property int index
+        width: 3
+        height: setupWave.height
+        x: index * 6
+        Rectangle {
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.verticalCenter: parent.verticalCenter
+          width: parent.width
+          height: Math.max(2, parent.height * (0.18 + 0.34 * (0.5 + 0.5 * Math.sin((root.setupWavePhase + index * 1.25) / 2.8))))
+          radius: 1.5
+          color: root.colorForLevel(0.22 + index / (setupWave.bars * 3))
+          opacity: 0.9
+          Behavior on height { NumberAnimation { duration: 100 } }
+        }
+      }
+    }
+
+    // A few small embers make it clear this is Ember's intentional setup
+    // state, while staying separate from the real audio-reactive particles.
+    Repeater {
+      model: 4
+      delegate: Rectangle {
+        id: setupEmber
+        required property int index
+        width: index % 2 === 0 ? 2 : 3
+        height: width
+        radius: width / 2
+        opacity: 0
+        color: index % 2 === 0 ? "#FF6A22" : "#E34528"
+
+        function launch() {
+          x = Math.max(0, Math.min(setupWave.width - width, Math.random() * setupWave.width))
+          y = setupWave.height - 2
+          emberRise.duration = 900 + Math.floor(Math.random() * 900)
+          emberFade.duration = emberRise.duration
+          emberFlight.restart()
+        }
+
+        Component.onCompleted: nextSetupEmber.restart()
+
+        Timer {
+          id: nextSetupEmber
+          interval: 300 + Math.floor(Math.random() * 900)
+          repeat: false
+          onTriggered: setupEmber.launch()
+        }
+
+        ParallelAnimation {
+          id: emberFlight
+          onStopped: {
+            nextSetupEmber.interval = 350 + Math.floor(Math.random() * 1000)
+            nextSetupEmber.restart()
+          }
+          NumberAnimation {
+            id: emberRise
+            target: setupEmber
+            property: "y"
+            from: setupWave.height - 2
+            to: -8 - Math.floor(Math.random() * 9)
+            easing.type: Easing.OutQuad
+          }
+          NumberAnimation {
+            id: emberFade
+            target: setupEmber
+            property: "opacity"
+            from: 0.72
+            to: 0
+          }
+        }
+      }
+    }
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      onEntered: if (bar) bar.showTooltip(root, "Set up Ember audio visualiser")
+      onExited: if (bar) bar.hideTooltip(root)
+      onClicked: root.setupOpen = true
+    }
+  }
+
+  Timer {
+    interval: 100
+    running: root.needsCava
+    repeat: true
+    onTriggered: root.setupWavePhase += 1
   }
 
   // A few independent embers make the spectrum feel like a small fire rather
@@ -543,6 +723,7 @@ Item {
 
   MouseArea {
     anchors.fill: spectrum
+    enabled: !root.needsCava
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
     acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -551,6 +732,107 @@ Item {
     onClicked: function(mouse) {
       if (mouse.button === Qt.RightButton) root.settingsOpen = !root.settingsOpen
       else root.raiseActivePlayer()
+    }
+  }
+
+  PopupCard {
+    id: setupPopup
+    anchorItem: root
+    bar: root.bar
+    owner: root
+    open: root.setupOpen && root.needsCava
+    contentWidth: fittedContentWidth(286)
+    contentHeight: fittedContentHeight(setupColumn.implicitHeight)
+
+    Column {
+      id: setupColumn
+      anchors.fill: parent
+      spacing: 9
+
+      Text {
+        text: "Set up Ember"
+        color: Color.foreground
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 14
+      }
+
+      Text {
+        width: parent.width
+        text: "Ember needs Cava to turn PipeWire audio into a live visualiser."
+        color: Color.foreground
+        opacity: 0.86
+        wrapMode: Text.WordWrap
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 11
+      }
+
+      Rectangle {
+        width: parent.width
+        height: 30
+        radius: 5
+        color: Color.background
+        border.width: 1
+        border.color: Color.muted
+        Row {
+          anchors.centerIn: parent
+          spacing: 0
+          Text {
+            text: "$ "
+            color: root.interactionColor
+            font.family: "monospace"
+            font.pixelSize: 11
+          }
+          Text {
+            text: root.cavaInstallCommand
+            color: Color.foreground
+            font.family: "monospace"
+            font.pixelSize: 11
+          }
+        }
+      }
+
+      Row {
+        width: parent.width
+        spacing: 6
+        Repeater {
+          model: [
+            { label: root.installCommandCopied ? "Copied" : "Copy command", action: "copy" },
+            { label: "Open terminal", action: "terminal" }
+          ]
+          delegate: Rectangle {
+            required property var modelData
+            width: (setupColumn.width - 6) / 2
+            height: 29
+            radius: 5
+            color: root.interactionColor
+            Text {
+              anchors.centerIn: parent
+              text: modelData.label
+              color: Color.background
+              font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+              font.pixelSize: 11
+            }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: {
+                if (modelData.action === "copy") root.copyCavaInstallCommand()
+                else root.openCavaInstallTerminal()
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        width: parent.width
+        text: "After it finishes, Ember will start when audio is playing."
+        color: Color.foreground
+        opacity: 0.72
+        wrapMode: Text.WordWrap
+        font.family: root.bar ? root.bar.fontFamily : "sans-serif"
+        font.pixelSize: 10
+      }
     }
   }
 

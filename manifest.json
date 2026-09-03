@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "id": "io.github.joshz7.afterglow",
   "name": "Ember — Audio Controller and Visualiser",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "JoshZ7",
-  "description": "First install Cava with `omarchy pkg add cava`; then enjoy a theme-aware PipeWire spectrum with ember effects and MPRIS media controls",
+  "description": "Bring your bar to life with a flowing PipeWire spectrum, ember effects, and elegant MPRIS media controls",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "CavaNowPlaying.qml"
   },
   "barWidget": {
     "displayName": "Ember",
-    "description": "Requires Cava (`omarchy pkg add cava`): a PipeWire spectrum with ember effects and MPRIS media controls",
+    "description": "A living PipeWire spectrum with ember effects and MPRIS media controls. If Cava is missing, Ember guides you through its one-command setup.",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "left",

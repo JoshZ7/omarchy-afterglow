@@ -17,6 +17,12 @@ FRAME_RE = re.compile(rb"[0-9;]+\r?\n?\Z")
 child_process = None
 
 
+def cava_available():
+    """Return whether a runnable Cava binary is already on the user's PATH."""
+    return any(os.access(os.path.join(path, "cava"), os.X_OK)
+               for path in os.environ.get("PATH", "").split(os.pathsep))
+
+
 def fail(message):
     print(f"cava-pulse: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -224,8 +230,7 @@ def run_cava(config_path, state_path):
             except BlockingIOError:
                 return 0
             publish(directory, ZERO_FRAME.encode())
-            if not any(os.access(os.path.join(path, "cava"), os.X_OK)
-                           for path in os.environ.get("PATH", "").split(os.pathsep)):
+            if not cava_available():
                 print("cava-pulse: Cava is not installed. Install it with: omarchy pkg add cava", file=sys.stderr)
                 return 0
             signal.signal(signal.SIGTERM, stop_child)
@@ -257,6 +262,8 @@ def run_cava(config_path, state_path):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 2 and sys.argv[1] == "--check-cava":
+        raise SystemExit(0 if cava_available() else 1)
     if len(sys.argv) == 3 and sys.argv[1] == "--read":
         raise SystemExit(read_frame(sys.argv[2]))
     if len(sys.argv) == 3 and sys.argv[1] == "--read-theme":

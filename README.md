@@ -1,6 +1,6 @@
 # Ember — Audio Controller and Visualiser
 
-A theme-aware [Cava](https://github.com/karlstav/cava) spectrum for the Omarchy bar, paired with a compact MPRIS now-playing control and optional ember effects.
+A living, theme-aware [Cava](https://github.com/karlstav/cava) spectrum for the Omarchy bar, paired with a compact MPRIS now-playing control and optional ember effects.
 
 Hover it to reveal the current title and play/pause control. The metadata scrolls when needed; click it once to play/pause, twice to skip forward, and three times to go back. Clicking the spectrum focuses the active media source when it supports MPRIS `Raise`.
 
@@ -9,7 +9,9 @@ Hover it to reveal the current title and play/pause control. The metadata scroll
 ## Requirements
 
 - Omarchy with the Quickshell bar
-- Cava with PipeWire support:
+- Cava with PipeWire support. If it is not installed, Ember shows a small
+  flowing setup wave in the bar; click it to copy the command or open it in a
+  terminal, where it remains visible and uses the normal package confirmation:
 
   ```bash
   omarchy pkg add cava
